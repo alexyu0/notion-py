@@ -1,3 +1,4 @@
+from copy import deepcopy
 import hashlib
 import json
 import re
@@ -96,7 +97,7 @@ class NotionClient(object):
 
     def start_monitoring(self):
         self._monitor.poll_async()
-    
+
     def _fetch_guest_space_data(self, records):
         """
         guest users have an empty `space` dict, so get the space_id from the `space_view` dict instead,
@@ -282,12 +283,28 @@ class NotionClient(object):
                 for block_id in updated_blocks
             ]
 
+        def transform_operations_for_api(ops):
+            for op in ops:
+                op['pointer'] = {
+                    'id': op.pop('id'),
+                    'table': op.pop('table'),
+                    'spaceId': self.current_space.id,
+                }
+            return ops
+
         # if we're in a transaction, just add these operations to the list; otherwise, execute them right away
         if self.in_transaction():
             self._transaction_operations += operations
         else:
-            data = {"operations": operations}
-            self.post("submitTransaction", data)
+            data = {
+                'requestId': str(uuid.uuid4()),
+                'transactions': [{
+                    'id': str(uuid.uuid4()),
+                    "operations": transform_operations_for_api(deepcopy(operations)),
+                    'spaceId': self.current_space.id
+                }]
+            }
+            self.post("saveTransactions", data)
             self._store.run_local_operations(operations)
 
     def query_collection(self, *args, **kwargs):
@@ -376,6 +393,7 @@ class NotionClient(object):
             "created_time": now(),
             "parent_id": parent.id,
             "parent_table": parent._table,
+            'space_id': self.current_space.id,
         }
 
         args.update(kwargs)
